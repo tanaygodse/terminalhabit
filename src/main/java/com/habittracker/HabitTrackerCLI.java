@@ -11,13 +11,21 @@ import java.util.Optional;
 public class HabitTrackerCLI {
     private final HabitService habitService;
     private final NotificationService notificationService;
+    private final NotificationDaemon notificationDaemon;
     
     public HabitTrackerCLI() {
         this.habitService = new HabitService();
         this.notificationService = new NotificationService(habitService);
+        this.notificationDaemon = new NotificationDaemon();
     }
     
     public static void main(String[] args) {
+        // Handle daemon process entry point
+        if (args.length > 0 && "daemon-process".equals(args[0])) {
+            NotificationDaemon.main(args);
+            return;
+        }
+        
         HabitTrackerCLI cli = new HabitTrackerCLI();
         
         if (args.length == 0) {
@@ -60,6 +68,12 @@ public class HabitTrackerCLI {
                 break;
             case "daemon":
                 handleDaemonCommand();
+                break;
+            case "stop-daemon":
+                handleStopDaemonCommand();
+                break;
+            case "daemon-status":
+                handleDaemonStatusCommand();
                 break;
             case "test-notification":
                 handleTestNotificationCommand();
@@ -183,20 +197,15 @@ public class HabitTrackerCLI {
         try {
             LocalTime time = LocalTime.parse(args[1], DateTimeFormatter.ofPattern("HH:mm"));
             habitService.setAlertTime(time);
-            notificationService.startNotifications(true); // Keep JVM alive for background notifications
-            System.out.printf("✓ Alert set for %s - running in background%n", time);
-            System.out.println("Press Ctrl+C to stop background notifications");
             
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("\nStopping notifications...");
-                notificationService.stopNotifications();
-            }));
-            
-            try {
-                Thread.currentThread().join(); // Keep main thread alive
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            // Start daemon in background
+            if (notificationDaemon.startDaemon()) {
+                System.out.printf("✓ Alert set for %s - daemon started in background%n", time);
+                System.out.println("Use 'daemon-status' to check daemon status or 'stop-daemon' to stop");
+            } else {
+                System.err.println("Failed to start daemon. You can try running 'daemon' command manually.");
             }
+            
         } catch (DateTimeParseException e) {
             throw new IllegalArgumentException("Invalid time format. Use HH:MM (24-hour format)");
         }
@@ -213,20 +222,11 @@ public class HabitTrackerCLI {
         if (alertSettings.isPresent()) {
             AlertSettings settings = alertSettings.get();
             if (settings.isEnabled()) {
-                System.out.printf("Starting daemon mode with alert at %s%n", settings.getAlertTime());
-                System.out.println("Press Ctrl+C to stop...");
-                
-                notificationService.startNotifications(true);
-                
-                Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                    System.out.println("\nStopping notifications...");
-                    notificationService.stopNotifications();
-                }));
-                
-                try {
-                    Thread.currentThread().join();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+                if (notificationDaemon.startDaemon()) {
+                    System.out.printf("✓ Daemon started in background with alert at %s%n", settings.getAlertTime());
+                    System.out.println("Use 'daemon-status' to check status or 'stop-daemon' to stop");
+                } else {
+                    System.err.println("Failed to start daemon");
                 }
             } else {
                 System.out.println("No alert configured or alerts are disabled. Use 'set-alert' first.");
@@ -234,6 +234,18 @@ public class HabitTrackerCLI {
         } else {
             System.out.println("No alert configured. Use 'set-alert' first.");
         }
+    }
+    
+    private void handleStopDaemonCommand() {
+        if (notificationDaemon.stopDaemon()) {
+            System.out.println("✓ Daemon stopped successfully");
+        } else {
+            System.err.println("Failed to stop daemon or daemon was not running");
+        }
+    }
+    
+    private void handleDaemonStatusCommand() {
+        notificationDaemon.showDaemonStatus();
     }
     
     private void handleTestNotificationCommand() {
@@ -262,9 +274,11 @@ public class HabitTrackerCLI {
         System.out.println("  list                            - List all habits");
         System.out.println("  log <habit-name> [date]         - Log habit completion (default: today)");
         System.out.println("  status [date]                   - Show habit status (default: today)");
-        System.out.println("  set-alert <time>                - Set daily reminder and run in background");
+        System.out.println("  set-alert <time>                - Set daily reminder and start daemon");
         System.out.println("  disable-alert                   - Disable notifications");
-        System.out.println("  daemon                          - Run in background for notifications");
+        System.out.println("  daemon                          - Start background daemon for notifications");
+        System.out.println("  stop-daemon                     - Stop background daemon");
+        System.out.println("  daemon-status                   - Check daemon status");
         System.out.println("  test-notification               - Test notification system");
         System.out.println("  help                            - Show this help");
         System.out.println();
@@ -273,6 +287,7 @@ public class HabitTrackerCLI {
         System.out.println("  java -jar habit-tracker.jar log \"Morning Run\"");
         System.out.println("  java -jar habit-tracker.jar status");
         System.out.println("  java -jar habit-tracker.jar set-alert 19:30");
-        System.out.println("  java -jar habit-tracker.jar daemon");
+        System.out.println("  java -jar habit-tracker.jar daemon-status");
+        System.out.println("  java -jar habit-tracker.jar stop-daemon");
     }
 }
